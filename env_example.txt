@@ -1,0 +1,19 @@
+# تنظیمات ربات تلگرام
+BOT_TOKEN=7372272375:AAHpAxlWOnFGsm1nWJpI77YwXdKnxpYBgao
+
+# رمز عبور پنل ادمین
+ADMIN_PASSWORD=admin123
+
+# مدت زمان session ادمین (به ثانیه) - پیش‌فرض: 1 ساعت
+ADMIN_SESSION_DURATION=3600
+
+# تنظیمات دیتابیس MySQL
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=r8_passM
+DB_NAME=heshmatbot
+
+# تنظیمات لاگ
+LOG_LEVEL=INFO
+LOG_FILE=bot.log
