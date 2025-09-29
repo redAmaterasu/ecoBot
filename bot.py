@@ -416,10 +416,24 @@ def safe_edit_last_admin_message(user_id: int, text: str, reply_markup=None, par
 
 
 def safe_edit_admin(call, text: str, reply_markup=None, parse_mode: str = 'Markdown'):
-    """ویرایش امن پیام ادمین بر اساس callback و به‌روزرسانی مرجع آخرین پیام"""
+    """ویرایش امن پیام ادمین. اگر پیام فعلی مدیا است، حذف و پیام جدید ارسال می‌شود."""
     user_id = call.from_user.id
     chat_id = call.message.chat.id
     message_id = call.message.message_id
+    try:
+        # اگر پیام فعلی مدیا باشد (مثل photo)، امکان edit به متن نیست؛ حذف و ارسال جدید
+        content_type = getattr(call.message, 'content_type', 'text')
+        if content_type != 'text':
+            try:
+                bot.delete_message(chat_id, message_id)
+            except Exception:
+                pass
+            sent = bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+            remember_admin_message(user_id, sent.chat.id, sent.message_id)
+            return
+    except Exception:
+        pass
+
     new_msg = safe_edit_message(chat_id, message_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
     if new_msg:
         try:
@@ -703,13 +717,23 @@ def handle_admin_callback(call):
                     f"🧾 سفارش #{order_id}\n"
                     f"اسکرین‌شات پرداخت"
                 )
-                bot.send_photo(
+                # حذف پیام قبلی تا پیام جدید بجای آن نمایش داده شود
+                try:
+                    bot.delete_message(call.message.chat.id, call.message.message_id)
+                except Exception:
+                    pass
+                sent = bot.send_photo(
                     call.message.chat.id,
                     order['screenshot_file_id'],
                     caption=caption,
                     parse_mode='Markdown',
                     reply_markup=keyboard
                 )
+                try:
+                    # ذخیره مرجع پیام جدید برای safe-edit های بعدی
+                    remember_admin_message(call.from_user.id, sent.chat.id, sent.message_id)
+                except Exception:
+                    pass
             else:
                 bot.answer_callback_query(call.id, "❌ اسکرین‌شات موجود نیست")
         except ValueError:
