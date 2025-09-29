@@ -44,6 +44,7 @@ db = DatabaseManager()
 # ذخیره وضعیت کاربران و session های ادمین
 user_states = {}
 admin_sessions = {}  # {user_id: {'expires': datetime, 'login_time': datetime}}
+admin_last_messages = {}  # {user_id: {'chat_id': int, 'message_id': int}}
 
 
 def is_admin_session_valid(user_id: int) -> bool:
@@ -99,6 +100,16 @@ def cleanup_expired_sessions():
     for user_id in expired_users:
         del admin_sessions[user_id]
         logger.info(f"Admin session expired for user {user_id}")
+
+
+def remember_admin_message(user_id: int, chat_id: int, message_id: int) -> None:
+    """ذخیره آخرین پیام پنل ادمین برای کاربر جهت ویرایش‌های بعدی"""
+    admin_last_messages[user_id] = { 'chat_id': chat_id, 'message_id': message_id }
+
+
+def get_admin_message_ref(user_id: int):
+    """دریافت مرجع آخرین پیام ادمین کاربر"""
+    return admin_last_messages.get(user_id)
 
 
 def create_admin_menu():
@@ -338,7 +349,7 @@ def escape_markdown(text):
 
 
 def safe_edit_message(chat_id, message_id, text, reply_markup=None, parse_mode='Markdown'):
-    """ویرایش امن پیام با مدیریت خطا"""
+    """ویرایش امن پیام با مدیریت خطا. در صورت ارسال پیام جدید، همان Message را برمی‌گرداند."""
     try:
         bot.edit_message_text(
             text,
@@ -347,6 +358,7 @@ def safe_edit_message(chat_id, message_id, text, reply_markup=None, parse_mode='
             parse_mode=parse_mode,
             reply_markup=reply_markup
         )
+        return None
     except Exception as e:
         if "message is not modified" in str(e):
             # اگر پیام تغییر نکرده، فقط keyboard را به‌روزرسانی کن
@@ -357,22 +369,68 @@ def safe_edit_message(chat_id, message_id, text, reply_markup=None, parse_mode='
                         message_id,
                         reply_markup=reply_markup
                     )
+                    return None
                 except Exception:
                     # اگر keyboard هم تغییر نکرده، پیام جدید ارسال کن
-                    bot.send_message(
-                        chat_id,
-                        text,
-                        parse_mode=parse_mode,
-                        reply_markup=reply_markup
-                    )
+                    try:
+                        return bot.send_message(
+                            chat_id,
+                            text,
+                            parse_mode=parse_mode,
+                            reply_markup=reply_markup
+                        )
+                    except Exception:
+                        return None
+            return None
         else:
             # اگر خطای دیگری است، پیام جدید ارسال کن
-            bot.send_message(
-                chat_id,
-                text,
-                parse_mode=parse_mode,
-                reply_markup=reply_markup
-            )
+            try:
+                return bot.send_message(
+                    chat_id,
+                    text,
+                    parse_mode=parse_mode,
+                    reply_markup=reply_markup
+                )
+            except Exception:
+                return None
+
+
+def safe_edit_last_admin_message(user_id: int, text: str, reply_markup=None, parse_mode: str = 'Markdown') -> bool:
+    """ویرایش امن آخرین پیام ادمین کاربر. در صورت نبود مرجع، پیام جدید ارسال می‌کند."""
+    ref = get_admin_message_ref(user_id)
+    if ref:
+        new_msg = safe_edit_message(ref['chat_id'], ref['message_id'], text, reply_markup=reply_markup, parse_mode=parse_mode)
+        if new_msg:
+            try:
+                remember_admin_message(user_id, new_msg.chat.id, new_msg.message_id)
+            except Exception:
+                pass
+        return True
+    else:
+        try:
+            sent = bot.send_message(user_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
+            remember_admin_message(user_id, sent.chat.id, sent.message_id)
+            return True
+        except Exception:
+            return False
+
+
+def safe_edit_admin(call, text: str, reply_markup=None, parse_mode: str = 'Markdown'):
+    """ویرایش امن پیام ادمین بر اساس callback و به‌روزرسانی مرجع آخرین پیام"""
+    user_id = call.from_user.id
+    chat_id = call.message.chat.id
+    message_id = call.message.message_id
+    new_msg = safe_edit_message(chat_id, message_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+    if new_msg:
+        try:
+            remember_admin_message(user_id, new_msg.chat.id, new_msg.message_id)
+        except Exception:
+            pass
+    else:
+        try:
+            remember_admin_message(user_id, chat_id, message_id)
+        except Exception:
+            pass
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -442,7 +500,11 @@ def admin_panel(message):
 
 🎯 **منوی ادمین را انتخاب کنید:**
             """
-            bot.reply_to(message, admin_text, parse_mode='Markdown', reply_markup=create_admin_menu())
+            sent = bot.reply_to(message, admin_text, parse_mode='Markdown', reply_markup=create_admin_menu())
+            try:
+                remember_admin_message(user_id, sent.chat.id, sent.message_id)
+            except Exception:
+                pass
         else:
             # ثبت تلاش ناموفق
             db.add_log(user_id, 'admin_login_failed', f'Failed login attempt with password: {password[:3]}***')
@@ -484,12 +546,7 @@ def handle_admin_callback(call):
 
 🎯 **منوی ادمین را انتخاب کنید:**
         """
-        safe_edit_message(
-            call.message.chat.id, 
-            call.message.message_id,
-            admin_text,
-            reply_markup=create_admin_menu()
-        )
+        safe_edit_admin(call, admin_text, reply_markup=create_admin_menu())
     
     elif call.data == "admin_stats":
         # نمایش آمار
@@ -514,12 +571,7 @@ def handle_admin_callback(call):
 
 🔧 **وضعیت:** آنلاین ✅
             """
-            safe_edit_message(
-                call.message.chat.id,
-                call.message.message_id,
-                stats_text,
-                reply_markup=create_back_menu()
-            )
+            safe_edit_admin(call, stats_text, reply_markup=create_back_menu())
         except Exception as e:
             bot.answer_callback_query(call.id, f"❌ خطا در دریافت آمار: {str(e)}")
     
@@ -543,12 +595,7 @@ def handle_admin_callback(call):
                 if len(users) > 10:
                     users_text += f"... و {len(users) - 10} کاربر دیگر"
             
-            safe_edit_message(
-                call.message.chat.id,
-                call.message.message_id,
-                users_text,
-                reply_markup=create_back_menu()
-            )
+            safe_edit_admin(call, users_text, reply_markup=create_back_menu())
         except Exception as e:
             bot.answer_callback_query(call.id, f"❌ خطا در دریافت لیست کاربران: {str(e)}")
     
@@ -559,12 +606,7 @@ def handle_admin_callback(call):
         text = "🧾 سفارش‌های در انتظار تایید\n\n"
         if not orders_data['orders']:
             text += "هیچ سفارشی در انتظار نیست."
-            safe_edit_message(
-                call.message.chat.id,
-                call.message.message_id,
-                text,
-                reply_markup=create_admin_menu()
-            )
+            safe_edit_admin(call, text, reply_markup=create_admin_menu())
             return
         keyboard = InlineKeyboardMarkup()
         for order in orders_data['orders']:
@@ -587,7 +629,7 @@ def handle_admin_callback(call):
             pag.append(InlineKeyboardButton("بعدی ➡️", callback_data="noop"))
         keyboard.add(*pag)
         keyboard.add(InlineKeyboardButton("🔙 بازگشت", callback_data="admin_menu"))
-        safe_edit_message(call.message.chat.id, call.message.message_id, text, reply_markup=keyboard)
+        safe_edit_admin(call, text, reply_markup=keyboard)
 
     elif call.data.startswith("admin_orders_page_"):
         page = int(call.data.replace("admin_orders_page_", ""))
@@ -616,7 +658,7 @@ def handle_admin_callback(call):
             pag.append(InlineKeyboardButton("بعدی ➡️", callback_data="noop"))
         keyboard.add(*pag)
         keyboard.add(InlineKeyboardButton("🔙 بازگشت", callback_data="admin_menu"))
-        safe_edit_message(call.message.chat.id, call.message.message_id, text, reply_markup=keyboard)
+        safe_edit_admin(call, text, reply_markup=keyboard)
 
     elif call.data.startswith("admin_view_order_"):
         try:
@@ -640,7 +682,7 @@ def handle_admin_callback(call):
                 InlineKeyboardButton("❌ رد", callback_data=f"admin_reject_order_{order['id']}"),
             )
             keyboard.add(InlineKeyboardButton("🔙 بازگشت", callback_data="admin_orders"))
-            safe_edit_message(call.message.chat.id, call.message.message_id, text, reply_markup=keyboard)
+            safe_edit_admin(call, text, reply_markup=keyboard)
         except ValueError:
             bot.answer_callback_query(call.id, "❌ داده نامعتبر")
             logger.error(f"Invalid callback data for admin_view_order: {call.data}")
@@ -719,12 +761,7 @@ def handle_admin_callback(call):
 
 لطفاً پیام خود را ارسال کنید:
         """
-        safe_edit_message(
-            call.message.chat.id,
-            call.message.message_id,
-            broadcast_text,
-            reply_markup=create_back_menu()
-        )
+        safe_edit_admin(call, broadcast_text, reply_markup=create_back_menu())
     
     elif call.data == "admin_session":
         # نمایش اطلاعات session
@@ -743,12 +780,7 @@ def handle_admin_callback(call):
 
 💡 برای تمدید session، دوباره `/admin` را اجرا کنید.
         """
-        safe_edit_message(
-            call.message.chat.id,
-            call.message.message_id,
-            session_text,
-            reply_markup=create_back_menu()
-        )
+        safe_edit_admin(call, session_text, reply_markup=create_back_menu())
     
     elif call.data == "admin_refresh":
         # تازه‌سازی منو
@@ -759,12 +791,7 @@ def handle_admin_callback(call):
 
 🎯 **منوی ادمین را انتخاب کنید:**
         """
-        safe_edit_message(
-            call.message.chat.id,
-            call.message.message_id,
-            admin_text,
-            reply_markup=create_admin_menu()
-        )
+        safe_edit_admin(call, admin_text, reply_markup=create_admin_menu())
         bot.answer_callback_query(call.id, "🔄 منو تازه‌سازی شد!")
     
     elif call.data == "admin_products":
@@ -778,12 +805,7 @@ def handle_admin_callback(call):
 
 🎯 **عملیات:**
         """
-        safe_edit_message(
-            call.message.chat.id,
-            call.message.message_id,
-            products_text,
-            reply_markup=create_products_menu()
-        )
+        safe_edit_admin(call, products_text, reply_markup=create_products_menu())
     
     elif call.data == "admin_logout":
         # خروج از پنل ادمین
@@ -791,11 +813,7 @@ def handle_admin_callback(call):
         del admin_sessions[user_id]
         
         logout_text = "👋 **خروج موفق!** از پنل ادمین خارج شدید."
-        safe_edit_message(
-            call.message.chat.id,
-            call.message.message_id,
-            logout_text
-        )
+        safe_edit_admin(call, logout_text)
         bot.answer_callback_query(call.id, "👋 خروج موفق!")
 
 
@@ -1571,12 +1589,16 @@ def handle_photo(message):
             user_states[user_id]['image_height'] = photo.height
             user_states[user_id]['step'] = 'waiting_description'
             
-            bot.reply_to(message, 
+            text = (
                 f"✅ عکس محصول دریافت شد!\n\n"
                 f"📏 سایز: {photo.width}x{photo.height}\n"
                 f"📁 حجم: {photo.file_size} بایت\n\n"
                 f"📝 **مرحله 4/4: توضیحات محصول (اختیاری)**\n"
-                f"توضیحات محصول را ارسال کنید یا Enter بزنید تا رد شود:",
+                f"توضیحات محصول را ارسال کنید یا Enter بزنید تا رد شود:"
+            )
+            safe_edit_last_admin_message(
+                user_id,
+                text,
                 reply_markup=InlineKeyboardMarkup().add(
                     InlineKeyboardButton("⏭️ رد کردن", callback_data="skip_description"),
                     InlineKeyboardButton("❌ لغو", callback_data="admin_products")
@@ -1602,11 +1624,11 @@ def handle_photo(message):
                 product = db.get_product_with_images(product_id)
                 if product:
                     success_text = f"✅ عکس جدید با موفقیت اضافه شد!\n\n📏 سایز: {photo.width}x{photo.height}\n📊 تعداد کل عکس‌ها: {len(product.get('images', []))}"
-                    bot.reply_to(message, success_text, reply_markup=create_product_edit_menu(product_id))
+                    safe_edit_last_admin_message(user_id, success_text, reply_markup=create_product_edit_menu(product_id))
                 else:
-                    bot.reply_to(message, "✅ عکس اضافه شد!", reply_markup=create_products_menu())
+                    safe_edit_last_admin_message(user_id, "✅ عکس اضافه شد!", reply_markup=create_products_menu())
             else:
-                bot.reply_to(message, "❌ خطا در اضافه کردن عکس. لطفاً دوباره تلاش کنید.")
+                safe_edit_last_admin_message(user_id, "❌ خطا در اضافه کردن عکس. لطفاً دوباره تلاش کنید.")
             return
         
         elif user_data.get('action') == 'adding_image':
@@ -1627,11 +1649,11 @@ def handle_photo(message):
                 product = db.get_product_with_images(product_id)
                 if product:
                     success_text = f"✅ عکس جدید با موفقیت اضافه شد!\n\n📏 سایز: {photo.width}x{photo.height}\n📊 تعداد کل عکس‌ها: {len(product.get('images', []))}"
-                    bot.reply_to(message, success_text, reply_markup=create_product_edit_menu(product_id))
+                    safe_edit_last_admin_message(user_id, success_text, reply_markup=create_product_edit_menu(product_id))
                 else:
-                    bot.reply_to(message, "✅ عکس اضافه شد!", reply_markup=create_products_menu())
+                    safe_edit_last_admin_message(user_id, "✅ عکس اضافه شد!", reply_markup=create_products_menu())
             else:
-                bot.reply_to(message, "❌ خطا در اضافه کردن عکس. لطفاً دوباره تلاش کنید.")
+                safe_edit_last_admin_message(user_id, "❌ خطا در اضافه کردن عکس. لطفاً دوباره تلاش کنید.")
             return
 
         elif user_data.get('action') == 'buying_product':
@@ -1647,15 +1669,18 @@ def handle_photo(message):
                     f"🧾 شناسه سفارش: #{order_id}\n"
                     "⏳ سفارش شما در وضعیت در انتظار تایید است. پس از تایید ادمین، پیام تایید برای شما ارسال خواهد شد."
                 )
-                bot.reply_to(message, confirm_text, reply_markup=InlineKeyboardMarkup().add(
+                safe_edit_last_admin_message(user_id, confirm_text, reply_markup=InlineKeyboardMarkup().add(
                     InlineKeyboardButton("🧾 مشاهده سفارشات", callback_data="menu_orders")
                 ))
             else:
-                bot.reply_to(message, "❌ خطا در ثبت سفارش. لطفاً دوباره تلاش کنید.")
+                safe_edit_last_admin_message(user_id, "❌ خطا در ثبت سفارش. لطفاً دوباره تلاش کنید.")
             return
     
     # اگر عکس برای محصول ارسال نشده، پیام پیش‌فرض
-    bot.reply_to(message, "📸 عکس دریافت شد!")
+    try:
+        bot.reply_to(message, "📸 عکس دریافت شد!")
+    except Exception:
+        pass
 
 
 @bot.message_handler(commands=['help'])
@@ -1722,16 +1747,16 @@ def handle_text(message):
 • ارسال ناموفق: {failed_count}
 • کل کاربران: {len(users)}
                 """
-                bot.reply_to(message, result_text, parse_mode='Markdown', reply_markup=create_back_menu())
+                safe_edit_last_admin_message(user_id, result_text, reply_markup=create_back_menu())
                 
             except Exception as e:
                 logger.error(f"خطا در ارسال پیام عمومی: {e}")
-                bot.reply_to(message, f"❌ خطا در ارسال پیام: {str(e)}")
+                safe_edit_last_admin_message(user_id, f"❌ خطا در ارسال پیام: {str(e)}")
             
             # حذف وضعیت انتظار
             del user_states[user_id]
         else:
-            bot.reply_to(message, "❌ Session ادمین منقضی شده! دوباره وارد شوید.")
+            safe_edit_last_admin_message(user_id, "❌ Session ادمین منقضی شده! دوباره وارد شوید.")
             del user_states[user_id]
         return
     
