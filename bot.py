@@ -651,7 +651,23 @@ def handle_admin_callback(call):
             order_id = int(call.data.replace("admin_view_orders_ss_", ""))
             order = db.get_order(order_id)
             if order and order.get('screenshot_file_id'):
-                bot.send_photo(call.message.chat.id, order['screenshot_file_id'], caption=f"🧾 سفارش #{order_id} - اسکرین‌شات پرداخت")
+                keyboard = InlineKeyboardMarkup()
+                keyboard.add(
+                    InlineKeyboardButton("✅ تایید", callback_data=f"admin_approve_order_{order_id}"),
+                    InlineKeyboardButton("❌ رد", callback_data=f"admin_reject_order_{order_id}")
+                )
+                keyboard.add(InlineKeyboardButton("🔙 بازگشت", callback_data=f"admin_view_order_{order_id}"))
+                caption = (
+                    f"🧾 سفارش #{order_id}\n"
+                    f"اسکرین‌شات پرداخت"
+                )
+                bot.send_photo(
+                    call.message.chat.id,
+                    order['screenshot_file_id'],
+                    caption=caption,
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
+                )
             else:
                 bot.answer_callback_query(call.id, "❌ اسکرین‌شات موجود نیست")
         except ValueError:
