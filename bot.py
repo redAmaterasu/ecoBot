@@ -15,6 +15,7 @@ from database import DatabaseManager
 from dotenv import load_dotenv
 from functools import wraps
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+import time
 
 # بارگذاری متغیرهای محیطی
 load_dotenv()
@@ -2082,6 +2083,12 @@ def main():
             # پاک کردن session های منقضی شده
             cleanup_expired_sessions()
             
+            # اطمینان از غیرفعال بودن webhook برای جلوگیری از Break infinity polling
+            try:
+                bot.remove_webhook()
+            except Exception:
+                pass
+            
             # شروع polling با تنظیمات بهتر
             bot.infinity_polling(
                 timeout=30,  # افزایش timeout
@@ -2091,6 +2098,10 @@ def main():
                 skip_pending=True,  # رد کردن پیام‌های pending
                 allowed_updates=['message', 'callback_query']
             )
+
+            # اگر به هر دلیلی polling برگردد (بدون Exception)، وقفه کوتاه برای جلوگیری از لوپ سریع
+            logger.error("Polling returned unexpectedly; restarting after short delay...")
+            time.sleep(3)
             
         except KeyboardInterrupt:
             logger.info("⏹️ The robot stopped.")
