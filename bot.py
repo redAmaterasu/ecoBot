@@ -416,35 +416,61 @@ def safe_edit_last_admin_message(user_id: int, text: str, reply_markup=None, par
 
 
 def safe_edit_admin(call, text: str, reply_markup=None, parse_mode: str = 'Markdown'):
-    """ویرایش امن پیام ادمین. اگر پیام فعلی مدیا است، حذف و پیام جدید ارسال می‌شود."""
+    """ویرایش امن پیام ادمین.
+    - اگر پیام فعلی عکس باشد، ابتدا سعی می‌کنیم کپشن را ادیت کنیم تا پیام جدید نسازیم.
+    - در غیر این صورت از safe_edit_message برای متن استفاده می‌کنیم.
+    - در صورت خطا، حذف و ارسال پیام جدید آخرین راه‌حل است.
+    """
     user_id = call.from_user.id
     chat_id = call.message.chat.id
     message_id = call.message.message_id
-    try:
-        # اگر پیام فعلی مدیا باشد (مثل photo)، امکان edit به متن نیست؛ حذف و ارسال جدید
-        content_type = getattr(call.message, 'content_type', 'text')
-        if content_type != 'text':
+    content_type = getattr(call.message, 'content_type', 'text')
+    if content_type == 'photo':
+        try:
+            bot.edit_message_caption(
+                chat_id,
+                message_id,
+                caption=text,
+                parse_mode=parse_mode,
+                reply_markup=reply_markup
+            )
+            try:
+                remember_admin_message(user_id, chat_id, message_id)
+            except Exception:
+                pass
+            return
+        except Exception as e:
+            # اگر کپشن تغییر نکرد یا ادیت نشد، سعی می‌کنیم فقط کیبورد را ادیت کنیم
+            if "message is not modified" in str(e):
+                try:
+                    bot.edit_message_reply_markup(chat_id, message_id, reply_markup=reply_markup)
+                    remember_admin_message(user_id, chat_id, message_id)
+                    return
+                except Exception:
+                    pass
+            # در نهایت حذف و ارسال پیام جدید
             try:
                 bot.delete_message(chat_id, message_id)
             except Exception:
                 pass
             sent = bot.send_message(chat_id, text, parse_mode=parse_mode, reply_markup=reply_markup)
-            remember_admin_message(user_id, sent.chat.id, sent.message_id)
+            try:
+                remember_admin_message(user_id, sent.chat.id, sent.message_id)
+            except Exception:
+                pass
             return
-    except Exception:
-        pass
-
+    # حالت متن معمولی
     new_msg = safe_edit_message(chat_id, message_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
     if new_msg:
         try:
             remember_admin_message(user_id, new_msg.chat.id, new_msg.message_id)
         except Exception:
             pass
-    else:
-        try:
-            remember_admin_message(user_id, chat_id, message_id)
-        except Exception:
-            pass
+        return
+    try:
+        remember_admin_message(user_id, chat_id, message_id)
+    except Exception:
+        pass
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -729,11 +755,7 @@ def handle_admin_callback(call):
                     parse_mode='Markdown',
                     reply_markup=keyboard
                 )
-                try:
-                    # ذخیره مرجع پیام جدید برای safe-edit های بعدی
-                    remember_admin_message(call.from_user.id, sent.chat.id, sent.message_id)
-                except Exception:
-                    pass
+                # پیام عکس جدید را به عنوان مرجع ذخیره نکن؛ اجازه بده safe_edit_admin روی همان پیام (اگر لازم شد) ادیت کپشن انجام دهد
             else:
                 bot.answer_callback_query(call.id, "❌ اسکرین‌شات موجود نیست")
         except ValueError:
