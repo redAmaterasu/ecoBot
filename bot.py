@@ -369,18 +369,10 @@ def safe_edit_message(chat_id, message_id, text, reply_markup=None, parse_mode='
                         message_id,
                         reply_markup=reply_markup
                     )
-                    return None
                 except Exception:
-                    # اگر keyboard هم تغییر نکرده، پیام جدید ارسال کن
-                    try:
-                        return bot.send_message(
-                            chat_id,
-                            text,
-                            parse_mode=parse_mode,
-                            reply_markup=reply_markup
-                        )
-                    except Exception:
-                        return None
+                    # اگر keyboard هم تغییر نکرده، هیچ پیام جدیدی نساز
+                    pass
+            # هیچ کاری نکن تا پیام جدید ساخته نشود
             return None
         else:
             # اگر خطای دیگری است، پیام جدید ارسال کن
