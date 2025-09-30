@@ -1,1 +1,12 @@
 /venv/*
+*.log
+*.env
+*.txt
+*.sql
+*.json
+*.yaml
+*.yml
+*.ini
+*.cfg
+*.conf
+*.properties
