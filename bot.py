@@ -707,6 +707,8 @@ def handle_admin_callback(call):
                 f"وضعیت: {order['status']}\n"
                 f"تاریخ: {order['created_at'].strftime('%Y/%m/%d %H:%M')}\n"
             )
+            if order.get('shipping_address'):
+                text += f"📦 نشانی ارسال: {escape_markdown(order['shipping_address'])}\n"
             keyboard = InlineKeyboardMarkup()
             if order.get('screenshot_file_id'):
                 keyboard.add(InlineKeyboardButton("مشاهده اسکرین‌شات", callback_data=f"admin_view_orders_ss_{order['id']}"))
@@ -1124,8 +1126,16 @@ def handle_view_product_callback(call):
     """نمایش جزئیات محصول"""
     chat_id = call.message.chat.id
     message_id = call.message.message_id
+    user_id = call.from_user.id
     product_id = int(call.data.replace("view_product_", ""))
     
+    # اگر کاربر در حال خرید بود و به صفحه محصول برگشته، وضعیت خرید را لغو کن
+    try:
+        if user_id in user_states and isinstance(user_states[user_id], dict) and user_states[user_id].get('action') == 'buying_product':
+            del user_states[user_id]
+    except Exception:
+        pass
+
     product = db.get_product_with_images(product_id)
     if product:
         # ایجاد متن محصول
@@ -1188,7 +1198,7 @@ def handle_view_product_callback(call):
 
 @bot.callback_query_handler(func=lambda call: call.data.startswith('buy_product_'))
 def handle_buy_product_callback(call):
-    """شروع فرآیند خرید: درخواست ارسال اسکرین‌شات و ثبت وضعیت کاربر"""
+    """شروع فرآیند خرید: دریافت نشانی ارسال سپس درخواست اسکرین‌شات پرداخت"""
     chat_id = call.message.chat.id
     message_id = call.message.message_id
     user_id = call.from_user.id
@@ -1203,18 +1213,20 @@ def handle_buy_product_callback(call):
         safe_edit_message(chat_id, message_id, "❌ محصول یافت نشد!", reply_markup=create_user_back_menu())
         return
 
-    # ذخیره وضعیت برای انتظار عکس پرداخت
+    # ذخیره وضعیت برای دریافت نشانی ارسال
     user_states[user_id] = {
         'action': 'buying_product',
         'product_id': product_id,
-        'price': float(product['price'])
+        'price': float(product['price']),
+        'step': 'waiting_shipping_address'
     }
 
     text = (
         f"🛒 خرید محصول: {escape_markdown(product['name'])}\n\n"
         f"💰 مبلغ: {product['price']:,} تومان\n\n"
-        "لطفاً پس از واریز مبلغ، اسکرین‌شات پرداخت را به همین چت ارسال کنید.\n\n"
-        "پس از ارسال، سفارش شما در وضعیت در انتظار تایید قرار می‌گیرد و پس از تایید ادمین، پیام تایید دریافت خواهید کرد."
+        "📦 لطفاً نشانی کامل ارسال را وارد کنید:\n"
+        "مثال: تهران، خیابان آزادی، کوچه ۱۲، پلاک ۵، واحد ۲، کدپستی ۱۲۳۴۵۶۷۸۹۰\n\n"
+        "پس از ثبت نشانی، از شما اسکرین‌شات پرداخت خواسته می‌شود."
     )
     safe_edit_message(chat_id, message_id, text, reply_markup=InlineKeyboardMarkup().add(
         InlineKeyboardButton("❌ لغو", callback_data=f"view_product_{product_id}")
@@ -1695,12 +1707,13 @@ def handle_photo(message):
                 safe_edit_last_admin_message(user_id, "❌ خطا در اضافه کردن عکس. لطفاً دوباره تلاش کنید.")
             return
 
-        elif user_data.get('action') == 'buying_product':
+        elif user_data.get('action') == 'buying_product' and user_data.get('step') == 'waiting_payment_screenshot':
             # دریافت اسکرین‌شات پرداخت و ایجاد سفارش در انتظار تایید
             product_id = user_data['product_id']
             price = user_data['price']
+            shipping_address = user_data.get('shipping_address')
             photo = message.photo[-1]
-            order_id = db.create_order(user_id, product_id, price, photo.file_id)
+            order_id = db.create_order(user_id, product_id, price, photo.file_id, shipping_address)
             if order_id:
                 del user_states[user_id]
                 confirm_text = (
@@ -1894,6 +1907,21 @@ def handle_text(message):
             bot.reply_to(message, f"❌ خطا در به‌روزرسانی {field}. لطفاً دوباره تلاش کنید.")
         return
     
+    elif user_id in user_states and isinstance(user_states[user_id], dict) and user_states[user_id].get('action') == 'buying_product' and user_states[user_id].get('step') == 'waiting_shipping_address':
+        # دریافت نشانی ارسال و رفتن به مرحله پرداخت
+        user_states[user_id]['shipping_address'] = text
+        product_id = user_states[user_id]['product_id']
+        price = user_states[user_id]['price']
+        try:
+            bot.reply_to(message,
+                "📦 نشانی ارسال ثبت شد.\n\n"
+                "💳 حالا لطفاً مبلغ را واریز کرده و اسکرین‌شات پرداخت را همینجا ارسال کنید.",
+            )
+        except Exception:
+            pass
+        user_states[user_id]['step'] = 'waiting_payment_screenshot'
+        return
+
     elif user_id in user_states and isinstance(user_states[user_id], dict) and user_states[user_id].get('action') == 'adding_product':
         # افزودن محصول
         step = user_states[user_id].get('step')
