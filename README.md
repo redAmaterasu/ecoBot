@@ -20,7 +20,41 @@
 - MySQL Server
 - یک ربات تلگرام (از @BotFather)
 
-### مراحل نصب
+### نصب خودکار روی لینوکس (Ubuntu/Debian)
+
+```bash
+sudo bash scripts/setup.sh
+```
+
+اسکریپت:
+- وابستگی‌ها (Python، pip، venv، MySQL Server) را نصب می‌کند
+- venv می‌سازد و `requirements.txt` را نصب می‌کند
+- دیتابیس و یوزر را می‌سازد و `mysql_setup.sql` را اعمال می‌کند
+- فایل `.env` می‌سازد (BOT_TOKEN و ... را می‌پرسد)
+- سرویس systemd به نام `heshmatbot` می‌سازد و اجرا می‌کند
+
+متغیرهای قابل تنظیم (اختیاری) قبل از اجرا:
+
+```bash
+export PROJECT_DIR=/opt/heshmatbot
+export SERVICE_NAME=heshmatbot
+export DB_NAME=heshmatbot
+export DB_USER=heshmat
+export DB_PASSWORD=secret
+export MYSQL_ROOT_PWD=your_root_pwd
+export BOT_TOKEN=123:ABC
+export ADMIN_PASSWORD=admin123
+sudo -E bash scripts/setup.sh
+```
+
+پس از نصب:
+
+```bash
+systemctl status heshmatbot --no-pager
+journalctl -u heshmatbot -n 100 --no-pager
+```
+
+### مراحل نصب دستی
 
 1. **کلون کردن پروژه:**
    ```bash
