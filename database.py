@@ -141,6 +141,7 @@ class DatabaseManager:
                     price DECIMAL(10,2) NOT NULL,
                     status ENUM('pending','approved','rejected') DEFAULT 'pending',
                     screenshot_file_id VARCHAR(255),
+                    shipping_address TEXT NULL,
                     admin_id BIGINT NULL,
                     rejection_reason TEXT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -189,6 +190,13 @@ class DatabaseManager:
             try:
                 cursor.execute('CREATE INDEX idx_orders_created_at ON orders(created_at)')
             except mysql.connector.Error:
+                pass
+
+            # اطمینان از وجود ستون آدرس ارسال در جدول سفارش‌ها (برای سازگاری با پایگاه داده‌های قدیمی)
+            try:
+                cursor.execute('ALTER TABLE orders ADD COLUMN shipping_address TEXT NULL')
+            except mysql.connector.Error:
+                # ستون قبلاً وجود دارد
                 pass
             
             self.connection.commit()
@@ -804,14 +812,14 @@ class DatabaseManager:
                 'has_prev': False
             }
 
-    def create_order(self, user_id: int, product_id: int, price: float, screenshot_file_id: str) -> Optional[int]:
-        """ایجاد سفارش جدید در حالت در انتظار تایید"""
+    def create_order(self, user_id: int, product_id: int, price: float, screenshot_file_id: str, shipping_address: str) -> Optional[int]:
+        """ایجاد سفارش جدید در حالت در انتظار تایید همراه با نشانی ارسال"""
         try:
             cursor = self.connection.cursor()
             cursor.execute('''
-                INSERT INTO orders (user_id, product_id, price, status, screenshot_file_id)
-                VALUES (%s, %s, %s, 'pending', %s)
-            ''', (user_id, product_id, price, screenshot_file_id))
+                INSERT INTO orders (user_id, product_id, price, status, screenshot_file_id, shipping_address)
+                VALUES (%s, %s, %s, 'pending', %s, %s)
+            ''', (user_id, product_id, price, screenshot_file_id, shipping_address))
             self.connection.commit()
             order_id = cursor.lastrowid
             cursor.close()
