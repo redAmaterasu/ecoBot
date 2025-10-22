@@ -1,12 +1,3 @@
-"""
-ربات تلگرام HeshmatBot
-"""
-'''
-خب نه این منو رو نگه دار ولی اول باید کاربر داخل ربات ثبت نام کنه
-میخوام ورک فلو اینطوری باشه که کاربر وقتی /start رو زد اون پیام اولیه نشون داده بشه 
-بعد زیرش یه دکمه بیاد که ثبت نام کنه
-اول شماره تلفن ازش بگیره بعد ازش نام و نام خانوادگی 
-'''
 import telebot
 import logging
 import os
@@ -1128,7 +1119,7 @@ def handle_view_product_callback(call):
     message_id = call.message.message_id
     user_id = call.from_user.id
     product_id = int(call.data.replace("view_product_", ""))
-    
+
     # اگر کاربر در حال خرید بود و به صفحه محصول برگشته، وضعیت خرید را لغو کن
     try:
         if user_id in user_states and isinstance(user_states[user_id], dict) and user_states[user_id].get('action') == 'buying_product':
@@ -1138,17 +1129,23 @@ def handle_view_product_callback(call):
 
     product = db.get_product_with_images(product_id)
     if product:
-        # ایجاد متن محصول
+        # متن توضیحات محصول
+        description_text = (
+            f"📄 **توضیحات:**\n{escape_markdown(product['description'])}"
+            if product['description'] else "📄 **توضیحات:** ندارد"
+        )
+
+        # ایجاد متن اصلی محصول
         text = f"""
 🛍️ **{escape_markdown(product['name'])}**
 
 💰 **قیمت:** {product['price']:,} تومان
 
-{f"📄 **توضیحات:**\n{escape_markdown(product['description'])}" if product['description'] else "📄 **توضیحات:** ندارد"}
+{description_text}
 
 📅 **تاریخ اضافه شدن:** {product['created_at'].strftime('%Y/%m/%d')}
-        """
-        
+"""
+
         # ارسال عکس‌ها اگر وجود دارند
         if product.get('images'):
             try:
@@ -1157,21 +1154,21 @@ def handle_view_product_callback(call):
                     bot.delete_message(chat_id, message_id)
                 except:
                     pass
-                
+
                 # اضافه کردن اطلاعات عکس‌ها به متن
                 image_count = len(product['images'])
                 text_with_images = text + f"\n\n🖼️ **عکس‌ها:** {image_count} عکس"
-                
+
                 # ارسال اولین عکس با کپشن کامل
                 first_image = product['images'][0]
                 keyboard = InlineKeyboardMarkup()
                 keyboard.add(InlineKeyboardButton("🛒 خرید این محصول", callback_data=f"buy_product_{product_id}"))
                 keyboard.add(InlineKeyboardButton("🔙 بازگشت به محصولات", callback_data="menu_products"))
-                
+
                 # اگر بیش از یک عکس داریم، دکمه مشاهده همه عکس‌ها اضافه کن
                 if image_count > 1:
                     keyboard.add(InlineKeyboardButton(f"📸 مشاهده همه عکس‌ها ({image_count})", callback_data=f"view_all_images_{product_id}"))
-                
+
                 bot.send_photo(
                     chat_id,
                     first_image['file_id'],
@@ -1179,19 +1176,29 @@ def handle_view_product_callback(call):
                     parse_mode='Markdown',
                     reply_markup=keyboard
                 )
-                    
+
             except Exception as e:
                 logger.error(f"خطا در ارسال عکس محصول: {e}")
                 # اگر ارسال عکس ناموفق بود، متن را ارسال کن
-                safe_edit_message(chat_id, message_id, text + "\n\n❌ خطا در نمایش عکس‌ها", reply_markup=InlineKeyboardMarkup().add(
-                    InlineKeyboardButton("🔙 بازگشت به محصولات", callback_data="menu_products")
-                ))
+                safe_edit_message(
+                    chat_id,
+                    message_id,
+                    text + "\n\n❌ خطا در نمایش عکس‌ها",
+                    reply_markup=InlineKeyboardMarkup().add(
+                        InlineKeyboardButton("🔙 بازگشت به محصولات", callback_data="menu_products")
+                    )
+                )
         else:
             # اگر عکسی وجود ندارد، فقط متن را نمایش بده
-            safe_edit_message(chat_id, message_id, text, reply_markup=InlineKeyboardMarkup().add(
-                InlineKeyboardButton("🛒 خرید این محصول", callback_data=f"buy_product_{product_id}"),
-                InlineKeyboardButton("🔙 بازگشت به محصولات", callback_data="menu_products")
-            ))
+            safe_edit_message(
+                chat_id,
+                message_id,
+                text,
+                reply_markup=InlineKeyboardMarkup().add(
+                    InlineKeyboardButton("🛒 خرید این محصول", callback_data=f"buy_product_{product_id}"),
+                    InlineKeyboardButton("🔙 بازگشت به محصولات", callback_data="menu_products")
+                )
+            )
     else:
         safe_edit_message(chat_id, message_id, "❌ محصول یافت نشد!", reply_markup=create_user_back_menu())
 
