@@ -11,43 +11,67 @@ if [[ $(id -u) -ne 0 ]]; then
   exit 1
 fi
 
-PROJECT_DIR="/opt/heshmatbot"
-PYTHON_BIN="python3"
-SERVICE_NAME="heshmatbot"
-DB_NAME="heshmatbot"
+export DEBIAN_FRONTEND=noninteractive
 
-read -rp "Enter Telegram BOT_TOKEN: " BOT_TOKEN
-read -rp "Enter ADMIN_PASSWORD [admin123]: " ADMIN_PASSWORD
-ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
-read -rp "Enter MySQL root password (will be set if empty currently): " MYSQL_ROOT_PWD
-read -rp "Create DB user (non-root) [heshmat]: " DB_USER
-DB_USER=${DB_USER:-heshmat}
-read -srp "Password for DB user ${DB_USER}: " DB_PASSWORD
-echo
+PROJECT_DIR="${PROJECT_DIR:-/opt/heshmatbot}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+SERVICE_NAME="${SERVICE_NAME:-heshmatbot}"
+DB_NAME="${DB_NAME:-heshmatbot}"
+
+# Take input from env if provided, otherwise prompt interactively
+BOT_TOKEN="${BOT_TOKEN:-}"
+if [[ -z "${BOT_TOKEN}" ]]; then
+  read -rp "Enter Telegram BOT_TOKEN: " BOT_TOKEN
+fi
+
+ADMIN_PASSWORD="${ADMIN_PASSWORD:-admin123}"
+read -rp "Enter ADMIN_PASSWORD [${ADMIN_PASSWORD}]: " _ADMIN_PASSWORD || true
+ADMIN_PASSWORD=${_ADMIN_PASSWORD:-${ADMIN_PASSWORD}}
+
+MYSQL_ROOT_PWD="${MYSQL_ROOT_PWD:-}"
+if [[ -z "${MYSQL_ROOT_PWD}" ]]; then
+  read -rp "Enter MySQL root password (leave empty if using socket auth): " MYSQL_ROOT_PWD || true
+fi
+
+DB_USER_DEFAULT="${DB_USER:-heshmat}"
+read -rp "Create DB user (non-root) [${DB_USER_DEFAULT}]: " _DB_USER || true
+DB_USER="${_DB_USER:-${DB_USER_DEFAULT}}"
+
+DB_PASSWORD="${DB_PASSWORD:-}"
+if [[ -z "${DB_PASSWORD}" ]]; then
+  read -srp "Password for DB user ${DB_USER}: " DB_PASSWORD
+  echo
+fi
 
 echo "Updating apt cache..."
 apt-get update -y
 
 echo "Installing dependencies..."
-DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  curl ca-certificates git python3 python3-venv python3-pip \
+apt-get install -y \
+  curl ca-certificates git rsync python3 python3-venv python3-pip \
   mysql-server
 
-echo "Securing MySQL and setting root password if needed..."
+echo "Ensuring MySQL is running..."
 systemctl enable --now mysql
 
-# Try to set root password and switch to native password auth
-mysql -uroot -e "SELECT 1" >/dev/null 2>&1 || true
-if ! mysql -uroot -e "SELECT 1" >/dev/null 2>&1; then
-  echo "Configuring MySQL root account..."
-  mysql --user=root <<SQL
-ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${MYSQL_ROOT_PWD}';
-FLUSH PRIVILEGES;
-SQL
+# Determine root authentication method and build a reusable mysql command
+MYSQL_CMD_ROOT=(mysql -uroot)
+if ! "${MYSQL_CMD_ROOT[@]}" -e "SELECT 1" >/dev/null 2>&1; then
+  # If password provided, try password auth
+  if [[ -n "${MYSQL_ROOT_PWD}" ]]; then
+    MYSQL_CMD_ROOT=(mysql -uroot -p"${MYSQL_ROOT_PWD}")
+    if ! "${MYSQL_CMD_ROOT[@]}" -e "SELECT 1" >/dev/null 2>&1; then
+      echo "Cannot authenticate to MySQL as root with provided password." >&2
+      exit 1
+    fi
+  else
+    echo "Cannot authenticate to MySQL as root. Provide MYSQL_ROOT_PWD if socket auth is not enabled." >&2
+    exit 1
+  fi
 fi
 
 echo "Creating database and user..."
-mysql -uroot -p"${MYSQL_ROOT_PWD}" <<SQL
+"${MYSQL_CMD_ROOT[@]}" <<SQL
 CREATE DATABASE IF NOT EXISTS ${DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
 GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'localhost';
@@ -56,7 +80,8 @@ SQL
 
 echo "Deploying project to ${PROJECT_DIR}..."
 mkdir -p "${PROJECT_DIR}"
-rsync -a --delete --exclude ".git" --exclude "venv" /workspace/ "${PROJECT_DIR}/"
+# Copy from current directory to target (excluding VCS and virtualenv)
+rsync -a --delete --exclude ".git" --exclude "venv" "$(pwd)/" "${PROJECT_DIR}/"
 cd "${PROJECT_DIR}"
 
 echo "Creating virtual environment..."
